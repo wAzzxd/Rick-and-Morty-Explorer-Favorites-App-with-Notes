@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- İNTERNET İZNİNİ BURAYA EKLENİYOR (xml'de yorum satırı böyle açılıyormuş)-->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- .di.RickAndMortyApplication kısmındaki başındaki nokta, "ana paketimizin -->
+    <!-- (com.example.rickandmortyproject) altındaki di paketi içinde" demek -->
+
+
+    <!--
+    Android'e ait normalde, senin hiç dokunmadığın, android.app.Application diye
+    generic/genel bir sınıf var - her Android uygulaması varsayılan olarak bunu
+    kullanır, ekstra bir şey yapmıyor.
+
+    Biz kendi RickAndMortyApplication sınıfımızı yazdık çünkü içine "uygulama
+    açılır açılmaz Koin'i başlat" kodunu koymak istedik. Ama sadece bu dosyayı
+    yazmış olmak, Android'e otomatik olarak "artık senin genel Application'ın
+    yerine benim bu özel sınıfımı kullan" demiyor. Android hâlâ, sen ona
+    söylemediğin sürece, kendi varsayılan/genel Application sınıfını kullanmaya
+    devam eder - bizim yazdığımız RickAndMortyApplication hiç çalışmaz, sanki
+    hiç yazılmamış gibi kalır.
+
+    AndroidManifest.xml, Android'in "bu uygulama hakkında temel bilgiler nerede"
+    diye baktığı özel bir yapılandırma dosyası - hangi ekranlar var, hangi
+    izinler isteniyor, ve hangi Application sınıfı kullanılacak gibi bilgiler
+    orada tanımlanır. Aşağıdaki "android:name=".di.RickAndMortyApplication""
+    satırı, tam olarak şunu söylüyor:
+
+    "Android, uygulamayı açarken kendi varsayılan Application'ın yerine,
+    benim di paketimdeki RickAndMortyApplication sınıfını oluştur ve çalıştır."
+
+    Bu satırı eklemezsek: RickAndMortyApplication.kt dosyası projede durur
+    ama Android onu hiç görmez, hiç çalıştırmaz. Sonuç olarak startKoin { }
+    hiçbir zaman çalışmaz, Koin hiç başlamaz. İleride bir ViewModel yazıp
+    Koin'den bir nesne istediğimizde (CharacterRepository gibi) uygulama
+    çöker, çünkü Koin'e "sen hiç başlamadın ki" der (KoinApplication has
+    not been started gibi bir hata mesajı görürsün).
+
+    Kısacası: RickAndMortyApplication.kt "ne yapılacağının tarifi",
+    Manifest'teki bu satır ise "bu tarifi kullan" demek. İkisi birlikte çalışır.
+-->
+       <application
+           android:name=".di.RickAndMortyApplication"
+           android:allowBackup="true"
+           android:dataExtractionRules="@xml/data_extraction_rules"
+           android:fullBackupContent="@xml/backup_rules"
+           android:icon="@mipmap/ic_launcher"
+           android:label="@string/app_name"
+           android:roundIcon="@mipmap/ic_launcher_round"
+           android:supportsRtl="true"
+           android:theme="@style/Theme.Rickandmortyproject">
+                   <activity
+                       android:name=".MainActivity"
+                       android:exported="true"
+                       android:label="@string/app_name"
+                       android:theme="@style/Theme.Rickandmortyproject"
+                       android:windowSoftInputMode="adjustResize">
+                       <intent-filter>
+                           <action android:name="android.intent.action.MAIN" />
+
+                           <category android:name="android.intent.category.LAUNCHER" />
+                       </intent-filter>
+                   </activity>
+               </application>
+
+           </manifest>
