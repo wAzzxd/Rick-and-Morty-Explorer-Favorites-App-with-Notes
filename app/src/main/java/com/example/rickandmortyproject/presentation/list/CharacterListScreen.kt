@@ -1,145 +1,173 @@
 package com.example.rickandmortyproject.presentation.list
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import org.koin.androidx.compose.koinViewModel
 
-// Bu, listenin GÖRÜNDÜĞÜ asıl ekranı tarif eden Composable - MVVM'deki
-// "View" katmanı burası. Bu fonksiyonun İÇİNDE hiçbir network/veritabanı
-// kodu YOK, sadece ViewModel'in state'ine BAKIP ekranı çiziyor.
 @Composable
 fun CharacterListScreen(
-    // "modifier: Modifier = Modifier" -> bu ekranı çağıran yerin (MainActivity'nin),
-    // boyut/padding gibi şeyleri dışarıdan kontrol edebilmesi için. Varsayılan
-    // değeri boş bir Modifier, yani hiçbir şey vermezsek hiçbir kısıtlama olmaz.
     modifier: Modifier = Modifier,
-
-    // "koinViewModel()" -> Koin'e "bana bir CharacterListViewModel ver" diyoruz.
-    // Koin, AppModule.kt'de yazdığımız tarife göre bunu otomatik oluşturup verir;
-    // repository'yi elle geçirmemize gerek kalmıyor.
     viewModel: CharacterListViewModel = koinViewModel()
 ) {
-    // "collectAsState()" -> ViewModel'deki StateFlow'u Compose'un İZLEYEBİLECEĞİ
-    // bir yapıya çeviriyor. "by" sayesinde "state.value.characters" yerine
-    // direkt "state.characters" yazabiliyoruz.
-    //
-    // BURASI ÇOK ÖNEMLİ: ViewModel içinde "_state.update { ... }" her çağrıldığında
-    // (örn. yeni sayfa geldiğinde, hata oluştuğunda), bu satır sayesinde Compose
-    // OTOMATİK olarak bu fonksiyonu YENİDEN ÇALIŞTIRIR (buna "recomposition" denir).
-    // Biz elle "ekranı yenile" demiyoruz, State değiştiği an ekran kendiliğinden güncellenir.
     val state by viewModel.state.collectAsState()
+    val listState = rememberLazyListState()
 
-    // "Box" -> içindeki elemanları ÜST ÜSTE bindirebilen bir kap (container).
-    // Burada aslında tek seferde SADECE BİR şey gösteriyoruz (ya loading, ya hata,
-    // ya liste), Box kullanmamızın sebebi CircularProgressIndicator ve hata
-    // metnini EKRANIN ORTASINA (Alignment.Center) hizalayabilmek.
-    Box(modifier = modifier.fillMaxSize()) {
+    val shouldLoadMore = remember {
+        derivedStateOf {
+            val lastVisibleItemIndex = listState.layoutInfo.visibleItemsInfo
+                .lastOrNull()?.index ?: 0
+            val totalItemsCount = state.characters.size
+            lastVisibleItemIndex >= totalItemsCount - 5 && totalItemsCount > 0
+        }
+    }
 
-        // "when { }" -> Kotlin'in çoklu-durum kontrol yapısı (diğer dillerdeki
-        // switch-case'e benzer, ama çok daha güçlü). Burada state'in içindeki
-        // değerlere göre HANGİ UI'ın çizileceğine karar veriyoruz.
-        when {
-            // Durum 1: İlk yükleme sürüyor (henüz hiç veri yok) -> ortada dönen çark göster.
-            state.isLoading -> {
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-            }
+    LaunchedEffect(shouldLoadMore.value) {
+        if (shouldLoadMore.value && state.error == null) {
+            viewModel.loadCharacters()
+        }
+    }
 
-            // Durum 2: Bir hata var (error null DEĞİLSE) -> hata mesajını göster.
-            // İleride burayı "Yeniden Dene" butonlu gerçek bir hata ekranıyla
-            // değiştireceğiz, şimdilik sade bir metin yeterli.
-            state.error != null -> {
-                Text(
-                    text = "Hata: ${state.error}",
-                    modifier = Modifier.align(Alignment.Center)
+    // "Column" -> arama kutusu, chip'ler ve listeyi DİKEY olarak sıralıyoruz.
+    Column(modifier = modifier.fillMaxSize()) {
+
+        // "OutlinedTextField" -> Material Design'ın çerçeveli metin kutusu.
+        OutlinedTextField(
+            // "value = state.searchQuery" -> kutunun İÇİNDEKİ metin, DOĞRUDAN
+            // state'ten okunuyor - yani ViewModel'deki değer TEK GERÇEK KAYNAK
+            // (single source of truth), TextField kendi başına bir metin
+            // TUTMUYOR, sadece state'i YANSITIYOR.
+            value = state.searchQuery,
+            // "onValueChange" -> kullanıcı her HARF yazdığında/sildiğinde
+            // tetiklenir, ViewModel'e "işte yeni metin" diye haber veriyoruz.
+            onValueChange = { newQuery -> viewModel.onSearchQueryChanged(newQuery) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            placeholder = { Text("Karakter ara...") },
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = "Ara") },
+            singleLine = true // metin kutusunun TEK SATIR kalmasını, Enter'a basınca alt satıra geçmemesini sağlıyor
+        )
+
+        // "LazyRow" -> LazyColumn'un YATAY versiyonu. Chip sayısı ekrana
+        // sığmasa bile YANA doğru kaydırılabilir, performanslı bir liste.
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp)
+        ) {
+            // Göstereceğimiz 3 durum: Alive, Dead, unknown. Bunu bir liste
+            // olarak tanımlayıp items() ile TEK TEK chip'e çeviriyoruz -
+            // aynı kodu 3 KERE elle yazmak yerine.
+            items(listOf("Alive", "Dead", "unknown")) { status ->
+                // "FilterChip" -> Material'ın "seçilebilir etiket" bileşeni,
+                // seçiliyken farklı renkte/ikonlu görünür.
+                FilterChip(
+                    // "selected" -> bu chip'in ŞU AN seçili olup olmadığını
+                    // state.statusFilter ile KARŞILAŞTIRARAK belirliyoruz.
+                    selected = state.statusFilter == status,
+                    // Tıklanınca ViewModel'e "bu durumu seç/kaldır" diyoruz
+                    // (ViewModel'deki onStatusFilterChanged zaten TOGGLE
+                    // mantığını içeriyordu - aynı chip'e tekrar basılırsa kaldırır).
+                    onClick = { viewModel.onStatusFilterChanged(status) },
+                    label = { Text(status) },
+                    modifier = Modifier.padding(end = 8.dp)
                 )
             }
+        }
 
-            // Durum 3 (else): Ne yükleniyor ne de hata var -> demek ki elimizde
-            // gösterilecek karakter listesi var, listeyi çiziyoruz.
-            else -> {
-                // "LazyColumn" -> Compose'un dikey, PERFORMANSLI liste bileşeni.
-                // "Lazy" kelimesi önemli: 800 küsür karakter olsa bile, aynı anda
-                // sadece o an EKRANDA GÖRÜNEN kartlar hafızada tutulur/çizilir,
-                // kullanıcı aşağı kaydırdıkça yenileri "tembelce" (lazy) oluşturulur.
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
+        // Geri kalan alanı (kalan TÜM boşluğu) liste/loading/hata durumu dolduracak.
+        Box(modifier = Modifier.weight(1f).fillMaxSize()) {
+            when {
+                state.isLoading -> {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                }
 
-                    // "items(state.characters) { character -> ... }" -> listedeki
-                    // HER BİR Character nesnesi için, aşağıdaki bloğu çalıştırıp
-                    // bir satır (kart) üretiyoruz. "character", o an sırası gelen
-                    // TEK BİR karakteri temsil ediyor (lambda parametresi).
-                    items(state.characters) { character ->
+                state.error != null && state.characters.isEmpty() -> {
+                    Column(modifier = Modifier.align(Alignment.Center)) {
+                        Text(text = "Hata: ${state.error}")
+                        Button(onClick = { viewModel.retry() }) {
+                            Text("Tekrar Dene")
+                        }
+                    }
+                }
 
-                        // Önceki adımda ayrı bir dosyada (CharacterCard.kt) yazdığımız
-                        // kart tasarımını burada ÇAĞIRIYORUZ. Kendi çizim mantığını
-                        // (resim, isim, durum rengi, kalp butonu) o dosyada tarif etmiştik,
-                        // burada sadece "bu karakter için bir kart çiz" diyoruz.
-                        CharacterCard(
-                            character = character,
+                // Arama/filtre SONUCUNDA hiç karakter bulunamadıysa (liste boş
+                // ama hata da yok, isLoading da false) -> kullanıcıya "sonuç
+                // bulunamadı" diye bir mesaj gösterelim, boş beyaz ekran YERİNE.
+                state.characters.isEmpty() && !state.isLoading -> {
+                    Text(
+                        text = "Sonuç bulunamadı",
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
 
-                            // isFavorite'i ŞİMDİLİK SABİT false veriyoruz. Neden?
-                            // Çünkü henüz Room veritabanını bağlamadık, dolayısıyla
-                            // "bu karakter gerçekten favorilerde mi" bilgisini
-                            // HİÇBİR YERDEN sorgulayamıyoruz. Bu, projeyi ADIM ADIM
-                            // ilerletme stratejimizin bir parçası: önce "iskeleti"
-                            // (UI'ın nasıl göründüğünü) çalışır hale getiriyoruz,
-                            // gerçek favori mantığını bir sonraki adımda (Room'u
-                            // bağlayınca) buraya ekleyeceğiz.
-                            isFavorite = false,
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        state = listState
+                    ) {
+                        items(
+                            items = state.characters,
+                            key = { character -> character.id }
+                        ) { character ->
+                            CharacterCard(
+                                character = character,
+                                isFavorite = false,
+                                onCardClick = { },
+                                onFavoriteClick = { }
+                            )
+                        }
 
-                            // "onCardClick = { }" -> boş bir lambda, yani "karta
-                            // tıklanınca ŞİMDİLİK hiçbir şey olmasın" demek.
-                            // Detay ekranını yazınca, burada "bu karakterin id'siyle
-                            // detay ekranına GİT" kodu olacak (navigasyon).
-                            onCardClick = { },
-
-                            // Aynı mantık: kalbe tıklanınca ŞİMDİLİK hiçbir şey
-                            // olmuyor. Room'u bağlayınca burada "bu karakteri
-                            // favorilere EKLE ya da favorilerden ÇIKAR" kodu olacak.
-                            onFavoriteClick = { }
-                        )
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                            ) {
+                                when {
+                                    state.isLoadingMore -> {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.align(Alignment.Center)
+                                        )
+                                    }
+                                    state.error != null -> {
+                                        Column(modifier = Modifier.align(Alignment.Center)) {
+                                            Text(text = state.error ?: "")
+                                            Button(onClick = { viewModel.retry() }) {
+                                                Text("Tekrar Dene")
+                                            }
+                                        }
+                                    }
+                                    else -> { }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
 }
-
-/*
- ==================== KAVRAMSAL NOTLAR ====================
-
- 1) BU DOSYA, MVVM'İN HANGİ KATMANI?
-    Bu, "View" katmanı - SADECE state'e bakıp ekranı çiziyor, hiçbir iş mantığı
-    (network isteği, hata yönetimi kararı, sayfalama hesaplaması) İÇERMİYOR.
-    Tüm o mantık CharacterListViewModel içinde. Bu ayrım sayesinde, yarın bu
-    ekranı komple farklı bir tasarımla (örn. Grid görünümü) değiştirsek bile,
-    ViewModel'in TEK SATIRI değişmez.
-
- 2) "state.isLoading", "state.error", "state.characters" NEREDEN GELİYOR?
-    Bunların hepsi, daha önce yazdığımız CharacterListState data class'ının
-    alanları. ViewModel, _state.update { it.copy(...) } ile bu alanları
-    güncelliyor, biz burada sadece OKUYORUZ (state by viewModel.state.collectAsState()
-    satırı sayesinde).
-
- 3) NEDEN "isFavorite = false" GİBİ GEÇİCİ/SABİT DEĞERLER KULLANMAK KÖTÜ BİR
-    ALIŞKANLIK DEĞİL?
-    Büyük bir projeyi TEK SEFERDE, HER ŞEYİYLE mükemmel yazmaya çalışmak
-    başlangıç için hem yorucu hem hataya açık. Bunun yerine "iskeleti kur,
-    çalıştır, gör, sonra bir sonraki parçayı ekle" yaklaşımı (BİZİM ŞU ANA
-    KADAR İZLEDİĞİMİZ YOL) gerçek profesyonel projelerde de kullanılan bir
-    yöntemdir - buna bazen "incremental development" (artımlı geliştirme) denir.
-
- 4) SIRADA NE VAR?
-    Room veritabanını kurup gerçek favori ekleme/çıkarma mantığını
-    CharacterListViewModel'e ekleyeceğiz, sonra buradaki isFavorite = false
-    ve onFavoriteClick = { } satırlarını GERÇEK değerlerle değiştireceğiz.
- ===========================================================
-*/

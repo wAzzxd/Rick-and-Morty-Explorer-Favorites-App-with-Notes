@@ -55,7 +55,11 @@ data class CharacterListState(
     // hatırlarsan, endReached true ise fonksiyon hemen return ile çıkıyordu).
     // Bu olmasaydı, kullanıcı listenin en altına her geldiğinde gereksiz yere
     // sürekli boş sonuç dönen isteklere devam ederdik.
-    val endReached: Boolean = false
+    val endReached: Boolean = false,
+
+    val searchQuery: String = "",      // kullanıcının arama kutusuna yazdığı anlık metin
+
+    val statusFilter: String? = null   // seçili durum filtresi: "Alive", "Dead", "unknown" ya da null (filtre yok)
 )
 
 /*

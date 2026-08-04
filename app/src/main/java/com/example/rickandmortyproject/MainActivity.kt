@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import com.example.rickandmortyproject.presentation.list.CharacterListScreen
+import com.example.rickandmortyproject.presentation.navigation.AppNavGraph
 import com.example.rickandmortyproject.ui.theme.RickandmortyprojectTheme
 
 class MainActivity : ComponentActivity() {
@@ -21,7 +22,8 @@ class MainActivity : ComponentActivity() {
         setContent {
             RickandmortyprojectTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    CharacterListScreen(
+
+                    AppNavGraph(
                         modifier = Modifier.padding(innerPadding)
                     )
                 }

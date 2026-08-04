@@ -3,8 +3,13 @@ package com.example.rickandmortyproject.presentation.list
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.rickandmortyproject.domain.repository.CharacterRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -29,29 +34,110 @@ class CharacterListViewModel(
     // "dışarıya sadece okuma izni ver, yazma iznini sende tut."
     val state: StateFlow<CharacterListState> = _state
 
+    // "MutableStateFlow<String>" -> arama kutusundaki metni AYRI bir Flow'da
+    // tutuyoruz (ana state'in içinde de var ama burada debounce UYGULAMAK
+    // için AYRICA tutuyoruz). Kullanıcı her harf yazdığında bu Flow'a yeni
+    // değer "emit" edilecek.
+    private val searchQueryFlow = MutableStateFlow("")
+
+    // "Job?" -> sayfalama coroutine'ini elle İPTAL edebilmek için referansını
+    // tutuyoruz. Arama/filtre değiştiğinde, DEVAM EDEN eski bir yükleme
+    // varsa onu iptal edip TEMİZ bir şekilde yeni aramaya başlamak istiyoruz.
+    private var loadJob: Job? = null
+
     // "init { }" -> bu ViewModel ilk oluşturulduğu anda (ekran ilk açıldığında)
     // otomatik çalışan blok. Burada ilk sayfayı hemen çekmeye başlıyoruz.
     init {
         loadCharacters()
+
+        // "searchQueryFlow" Flow'unu burada İZLEMEYE başlıyoruz.
+        // ".debounce(300)" -> kullanıcı YAZMAYI BIRAKTIKTAN 300 milisaniye
+        // sonra, hâlâ yeni bir harf gelmediyse, DEĞERİ bir alt adıma geçirir.
+        // Yani "r-i-c-k" hızlıca yazılırsa, ARADAKİ değerler (r, ri, ric)
+        // İPTAL edilir, sadece SON DEĞER ("rick") 300ms sessizlikten sonra geçer.
+        //
+        // ".distinctUntilChanged()" -> bir önceki emit edilen değerle AYNIYSA
+        // (örn. kullanıcı bir harf yazıp SİLİP AYNI harfi tekrar yazdıysa),
+        // TEKRAR işleme almaz - gereksiz aynı isteği önler.
+        //
+        // ".onEach { query -> ... }" -> debounce ve distinctUntilChanged'den
+        // GEÇEN her yeni değer için bu bloğu çalıştırır - burada ARAMAYI
+        // gerçekten TETİKLİYORUZ.
+        //
+        // ".launchIn(viewModelScope)" -> bu Flow zincirini viewModelScope
+        // içinde ÇALIŞTIRMAYA başlatır. ViewModel yok edildiğinde bu da
+        // otomatik iptal edilir (aynı viewModelScope.launch gibi güvenli).
+        searchQueryFlow
+            .debounce(300)
+            .distinctUntilChanged()
+            .onEach { query ->
+                _state.update { it.copy(searchQuery = query) }
+                resetAndReload()
+            }
+            .launchIn(viewModelScope)
+    }
+
+    // Compose ekranındaki TextField, kullanıcı her harf yazdığında bu
+    // fonksiyonu çağıracak. Burada state'i DOĞRUDAN güncellemiyoruz (yazı
+    // kutusunun GÖRÜNÜR metni ayrı tutuluyor, arama TETİKLEME işini
+    // searchQueryFlow üstleniyor) - böylece kullanıcı yazarken TextField
+    // asla "geç kalmış" görünmüyor, ama gerçek arama isteği debounce'lu.
+    fun onSearchQueryChanged(query: String) {
+        // Kullanıcının o an TAM OLARAK ne yazdığını GÖRSEL olarak hemen
+        // gösterebilmek için state'i anında güncelliyoruz.
+        _state.update { it.copy(searchQuery = query) }
+        // Ama GERÇEK aramayı searchQueryFlow üzerinden, debounce'a TABİ
+        // tutarak tetikliyoruz.
+        searchQueryFlow.value = query
+    }
+
+    // Chip'lerden birine tıklanınca çağrılacak. Aynı chip'e TEKRAR
+    // tıklanırsa filtreyi KALDIRIYORUZ (toggle davranışı).
+    fun onStatusFilterChanged(status: String?) {
+        val newFilter = if (_state.value.statusFilter == status) null else status
+        _state.update { it.copy(statusFilter = newFilter) }
+        resetAndReload()
+    }
+
+    // Arama/filtre DEĞİŞTİĞİNDE çağrılan yardımcı fonksiyon: state'i
+    // BAŞLANGIÇ durumuna döndürüp (liste boşalır, sayfa 1'e döner),
+    // yeni kritere göre BAŞTAN yükleme başlatıyoruz.
+    private fun resetAndReload() {
+        // Önce, EĞER devam eden bir yükleme coroutine'i varsa, İPTAL ediyoruz -
+        // aksi halde ESKİ arama sonucu, YENİ arama sonucundan SONRA gelip
+        // ekranı YANLIŞ veriyle doldurabilirdi (race condition).
+        loadJob?.cancel()
+
+        _state.update {
+            it.copy(
+                characters = emptyList(),
+                currentPage = 1,
+                endReached = false,
+                error = null
+            )
+        }
+        loadCharacters()
     }
 
     // Kullanıcı listenin sonuna gelince (infinite scroll) bu fonksiyon tekrar çağrılacak.
+    // Ayrıca resetAndReload() içinden de (arama/filtre değiştiğinde) çağrılıyor.
     fun loadCharacters() {
         // Zaten yükleniyorsa veya son sayfaya gelindiyse tekrar istek atma (gereksiz/çakışan istekleri önlüyoruz)
         if (_state.value.isLoading || _state.value.isLoadingMore || _state.value.endReached) return
 
-        // "viewModelScope.launch { }" -> bir COROUTINE başlatıyoruz. Bu blok
-        // arka planda çalışır, UI thread'i bloklamaz. ViewModel yok edildiğinde
-        // (ekran tamamen kapatıldığında) bu coroutine de OTOMATİK iptal edilir,
+        // "loadJob = viewModelScope.launch { }" -> başlattığımız coroutine'in
+        // referansını SAKLIYORUZ, böylece resetAndReload() içinde onu
+        // iptal edebiliyoruz. Bu, COROUTINE'İN kendisi UI thread'i bloklamadan
+        // arka planda çalışır, ViewModel yok edildiğinde OTOMATİK iptal edilir,
         // hafıza sızıntısı (memory leak) olmaz - viewModelScope'un sağladığı güvenlik budur.
-        viewModelScope.launch {
+        loadJob = viewModelScope.launch {
             val isFirstPage = _state.value.currentPage == 1
 
             // "_state.update { it.copy(...) }" -> mevcut state'i alıp, SADECE
             // belirttiğimiz alanları değiştirip yeni bir state üretiyoruz
             // (data class'ın bize verdiği copy() fonksiyonu burada işe yarıyor).
             // isFirstPage'e göre ya "isLoading" ya da "isLoadingMore" true yapıyoruz,
-            // ikisi farklı UI göstergeleri için (ilk yükleme = tam ekran shimmer,
+            // ikisi farklı UI göstergeleri için (ilk yükleme = tam ekran gösterge,
             // sayfa sonu yükleme = listenin altında küçük bir progress).
             _state.update {
                 if (isFirstPage) it.copy(isLoading = true, error = null)
@@ -59,14 +145,27 @@ class CharacterListViewModel(
             }
 
             try {
+                // DİKKAT: artık sadece page değil, GÜNCEL arama metnini ve
+                // filtreyi de repository'ye GEÇİYORUZ. Boş arama metnini
+                // API'ye "name" olarak göndermemek için, boşsa null yapıyoruz
+                // ("ifBlank { null }" -> metin boş veya sadece boşluksa null döner).
+                val query = _state.value.searchQuery.ifBlank { null }
+                val status = _state.value.statusFilter
+
                 // Repository'den (interface üzerinden) veriyi istiyoruz.
                 // Repository'nin arkasında Retrofit mi çalışıyor, bilmiyoruz, umurumuzda değil.
-                val newCharacters = repository.getCharacters(page = _state.value.currentPage)
+                val newCharacters = repository.getCharacters(
+                    page = _state.value.currentPage,
+                    name = query,
+                    status = status
+                )
 
                 _state.update {
                     it.copy(
                         // Eski listeye YENİ gelenleri EKLİYORUZ (infinite scroll mantığı,
-                        // sayfa değiştikçe listeyi SIFIRLAMIYORUZ, üstüne ekliyoruz)
+                        // sayfa değiştikçe listeyi SIFIRLAMIYORUZ, üstüne ekliyoruz).
+                        // NOT: arama/filtre değiştiğinde resetAndReload() zaten listeyi
+                        // BOŞALTTIĞI için, burada yine "ekleme" mantığı doğru çalışıyor.
                         characters = it.characters + newCharacters,
                         isLoading = false,
                         isLoadingMore = false,
@@ -76,19 +175,59 @@ class CharacterListViewModel(
                     )
                 }
             } catch (e: Exception) {
-                // Ağ hatası (internet yok, sunucu cevap vermedi vb.) burada yakalanıyor.
+                // Ağ hatası (internet yok, sunucu cevap vermedi, rate limit vb.)
+                // burada yakalanıyor. Kullanıcıya HAM/teknik hata mesajı ("HTTP 429")
+                // göstermek yerine, hatayı TÜRÜNE göre ayırt edip daha ANLAŞILIR bir
+                // mesaj üretiyoruz.
+                //
+                // "e is retrofit2.HttpException" -> Kotlin'in "is" anahtar kelimesi,
+                // bir nesnenin HANGİ TÜRDEN olduğunu kontrol etmemizi sağlar (type
+                // checking). Retrofit, sunucudan 200 (başarılı) DIŞINDA bir HTTP kodu
+                // geldiğinde (404, 429, 500 gibi), hatayı bu ÖZEL exception türüyle
+                // fırlatır. ".code()" ile TAM OLARAK hangi HTTP kodu geldiğini
+                // (429, 500 vb.) öğrenebiliyoruz.
+                val errorMessage = when {
+                    e is retrofit2.HttpException && e.code() == 404 ->
+                        // API, arama sonucunda HİÇ karakter bulamazsa 404
+                        // döndürüyor (bu Rick and Morty API'sinin kendine
+                        // özgü bir davranışı - normalde 404 "sayfa yok"
+                        // anlamına gelir, ama burada "sonuç yok" demek).
+                        // Bunu HATA gibi değil, "boş sonuç" gibi ele alıyoruz.
+                        null
+
+                    e is retrofit2.HttpException && e.code() == 429 ->
+                        "Çok hızlı istek attık, birkaç saniye bekleyip tekrar deneyin."
+
+                    e is retrofit2.HttpException && e.code() in 500..599 ->
+                        "Sunucuda geçici bir sorun var, birazdan tekrar deneyin."
+
+                    e is java.io.IOException ->
+                        // "IOException" -> internet bağlantısı KOPUKSA (sunucuya
+                        // hiç ULAŞILAMADIYSA) fırlatılan tür, HttpException'dan farklı -
+                        // HttpException sunucudan CEVAP geldiğinde (ama hata koduyla),
+                        // IOException ise sunucuya hiç ULAŞILAMADIĞINDA oluşur.
+                        "İnternet bağlantınızı kontrol edin."
+
+                    else ->
+                        e.message ?: "Bilinmeyen bir hata oluştu"
+                }
+
                 _state.update {
                     it.copy(
                         isLoading = false,
                         isLoadingMore = false,
-                        error = e.message ?: "Bilinmeyen bir hata oluştu"
+                        // 404 (sonuç yok) durumunda error'u null bırakıp,
+                        // endReached'i true yapıyoruz - böylece ekranda
+                        // "hata" değil, sadece BOŞ bir liste görünür.
+                        error = errorMessage,
+                        endReached = errorMessage == null || it.endReached
                     )
                 }
             }
         }
     }
 
-    // Kullanıcı "Yeniden Dene" butonuna bastığında çağrılacak.
+    // Kullanıcı "Tekrar Dene" butonuna bastığında çağrılacak.
     fun retry() {
         _state.update { it.copy(error = null) }
         loadCharacters()
@@ -96,13 +235,14 @@ class CharacterListViewModel(
 }
 
 /*
- ==================== KAVRAMSAL NOTLAR ====================
+ ==================== KAVRAMSAL NOTLAR - MVVM & STATE ====================
 
  1) MVVM BURADA NASIL İŞLİYOR?
     - Model: domain.model.Character ve CharacterRepository (veriyi temsil eden/getiren katman)
-    - ViewModel: bu sınıf - state'i tutuyor, iş mantığını (sayfalama, hata yönetimi) yürütüyor
-    - View:  sonra yazacağımız Compose ekranı - sadece "state.value.characters"a
-      bakıp ekrana çizecek, hiçbir iş mantığı (network, hata yönetimi) İÇERMEYECEK.
+    - ViewModel: bu sınıf - state'i tutuyor, iş mantığını (sayfalama, arama, filtre,
+      hata yönetimi) yürütüyor
+    - View: CharacterListScreen.kt - sadece "state.value.characters"a bakıp ekrana
+      çizecek, hiçbir iş mantığı (network, hata yönetimi, debounce) İÇERMEYECEK.
     Bu ayrımın faydası: View'ı (Compose kodunu) değiştirsek bile (örn. XML'e geçsek),
     ViewModel'in TEK SATIRI değişmez - iş mantığı UI'dan tamamen bağımsız.
 
@@ -119,10 +259,50 @@ class CharacterListViewModel(
     olmasını sağlar (örn. "isLoading true iken aynı zamanda error da dolu"
     gibi çelişkili durumları tek bir copy() çağrısında yönetebiliyoruz).
     Bu yaklaşıma "UI State pattern" denir, modern Android geliştirmede çok yaygın.
+ ===========================================================
+*/
 
- 4) SIRADA NE VAR?
-    Bu ViewModel'i Koin'e tanıtmamız gerekiyor (appModule'e bir satır ekleyeceğiz),
-    sonra presentation/list içine gerçek Compose ekranını (View'ı) yazıp bu
-    ViewModel'e bağlayacağız.
+/*
+ ==================== KAVRAMSAL NOTLAR - ARAMA & DEBOUNCE ====================
+
+ 1) NEDEN "searchQueryFlow" DİYE AYRI BİR MutableStateFlow VAR, STATE'İN
+    İÇİNDEKİ "searchQuery" YETMİYOR MU?
+    State'in içindeki searchQuery, SADECE "ekranda GÖRÜNEN metin ne" bilgisini
+    tutuyor - TextField'ın anlık, GECİKMESİZ görüntüsü için. searchQueryFlow ise
+    "GERÇEK arama isteğini ne zaman ATACAĞIZ" kararını debounce ile YÖNETMEK
+    için var. İkisini AYIRMAMIZIN sebebi: kullanıcı yazarken TextField'ın
+    GECİKMELİ görünmesini istemiyoruz (her harfte state.searchQuery ANINDA
+    güncelleniyor), ama ASIL network isteğinin 300ms beklemesini istiyoruz.
+
+ 2) "resetAndReload()" NEDEN GEREKLİ, NEDEN DİREKT loadCharacters() ÇAĞIRMIYORUZ?
+    loadCharacters(), MEVCUT sayfa numarasından DEVAM edip listeye EKLEME
+    yapacak şekilde tasarlandı (infinite scroll için). Ama arama/filtre
+    DEĞİŞTİĞİNDE, eski sonuçların üstüne YENİ arama sonucunu EKLEMEK değil,
+    listeyi TAMAMEN SIFIRLAYIP baştan başlamak istiyoruz - resetAndReload()
+    tam olarak bunu yapıyor: characters'ı boşaltıp, currentPage'i 1'e
+    döndürüp, SONRA loadCharacters()'ı çağırıyor.
+
+ 3) "loadJob?.cancel()" NEDEN ÖNEMLİ?
+    Diyelim kullanıcı "r" yazdı, 300ms'den ÖNCE de "rick" yazmayı bitirdi.
+    debounce zaten "r" için isteği İPTAL edip sadece "rick" için tetikleyecek.
+    Ama EĞER kullanıcı ÇOK YAVAŞ yazsa ve arada bir istek GERÇEKTEN atılmışsa,
+    sonra YENİ bir arama/filtre değişikliği olduğunda, ESKİ isteğin CEVABI
+    YENİ aramadan SONRA gelirse ekranı YANLIŞ (eski) veriyle doldurabilirdi.
+    Buna "race condition" (yarış durumu) denir. loadJob.cancel() ile HER
+    resetAndReload() öncesi eski coroutine'i güvenle iptal ediyoruz.
+
+ 4) API'DEN 404 GELMESİ NEDEN HATA OLARAK GÖSTERİLMİYOR?
+    Rick and Morty API'si, arama sonucunda HİÇBİR karakter bulunamazsa
+    404 (Not Found) döndürüyor - bu API'ye ÖZGÜ bir davranış, normalde
+    404 "sayfa/adres yok" anlamına gelir. Biz bunu YAKALAYIP, kullanıcıya
+    kırmızı bir hata mesajı YERİNE, sadece BOŞ bir liste gösteriyoruz
+    (errorMessage = null, endReached = true) - çünkü "sonuç bulunamadı"
+    aslında bir HATA değil, geçerli bir arama SONUCUDUR.
+
+ 5) SIRADA NE VAR?
+    CharacterListScreen.kt'ye arama kutusunu (TextField) ve durum filtresi
+    chip'lerini (FilterChip) ekleyeceğiz, onları buradaki
+    onSearchQueryChanged() ve onStatusFilterChanged() fonksiyonlarına
+    bağlayacağız.
  ===========================================================
 */
