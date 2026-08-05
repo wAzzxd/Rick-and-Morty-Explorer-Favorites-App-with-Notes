@@ -6,6 +6,7 @@ import com.example.rickandmortyproject.data.remote.RetrofitInstance
 import com.example.rickandmortyproject.data.remote.RickAndMortyApi
 import com.example.rickandmortyproject.data.repository.CharacterRepositoryImpl
 import com.example.rickandmortyproject.domain.repository.CharacterRepository
+import com.example.rickandmortyproject.presentation.favorites.FavoritesViewModel
 import com.example.rickandmortyproject.presentation.list.CharacterListViewModel
 import org.koin.android.ext.koin.androidContext
 import org.koin.androidx.viewmodel.dsl.viewModel
@@ -65,6 +66,15 @@ val appModule = module {
     // bize hazır bir CharacterListViewModel verecek -
     // "get()" -> ihtiyacı olan CharacterRepository'yi yukarıdaki tanımdan otomatik bulur.
     viewModel { CharacterListViewModel(get()) }
+
+    // YENİ EKLENEN SATIR: FavoritesViewModel'i de AYNI mantıkla Koin'e
+    // tanıtıyoruz. "get()" -> ihtiyacı olan CharacterRepository'yi (AYNI
+    // single<CharacterRepository> tanımından, yani AYNI Repository nesnesini)
+    // otomatik bulup veriyor. Bu sayede FavoritesViewModel ve
+    // CharacterListViewModel, TAM OLARAK AYNI Repository'yi (dolayısıyla
+    // AYNI Room veritabanını) paylaşıyorlar - biri favoriye eklerken,
+    // diğeri bunu ANINDA görebiliyor.
+    viewModel { FavoritesViewModel(get()) }
 }
 
 /*
@@ -94,17 +104,21 @@ val appModule = module {
 
  4) "single<CharacterRepository> { CharacterRepositoryImpl(get(), get()) }"
     SATIRINDAKİ İKİ "get()" NE İŞE YARIYOR?
-    CharacterRepositoryImpl artık İKİ parametre alacak şekilde güncellenecek:
-    biri RickAndMortyApi (Retrofit için), diğeri FavoriteCharacterDao (Room
-    için). Koin, sırayla İKİSİNİ de yukarıdaki tanımlardan otomatik bulup
-    Repository'ye veriyor - biz hangisinin hangi sırada geldiğini elle takip
-    etmiyoruz, Koin bunu constructor'daki parametre TÜRLERİNE bakarak
-    otomatik eşleştiriyor.
+    CharacterRepositoryImpl İKİ parametre alıyor: biri RickAndMortyApi
+    (Retrofit için), diğeri FavoriteCharacterDao (Room için). Koin, sırayla
+    İKİSİNİ de yukarıdaki tanımlardan otomatik bulup Repository'ye veriyor -
+    biz hangisinin hangi sırada geldiğini elle takip etmiyoruz, Koin bunu
+    constructor'daki parametre TÜRLERİNE bakarak otomatik eşleştiriyor.
 
- 5) SIRADA
-    CharacterRepositoryImpl'i güncelleyip DAO'yu kullanacak şekilde
-    (favori ekleme/çıkarma/sorgulama fonksiyonları) genişleteceğiz, sonra
-    CharacterListViewModel'i gerçek favori durumunu gösterecek şekilde
-    bağlayacağız.
+ 5) NEDEN İKİ AYRI "viewModel { }" TANIMI VAR (CharacterListViewModel VE
+    FavoritesViewModel için)?
+    Her ekranın KENDİ ViewModel'i olmalı - bu MVVM'in temel kuralı, her View
+    kendi state'ini yöneten kendi ViewModel'ine sahip olur. Ama İKİSİ de
+    AYNI CharacterRepository'yi (get() ile) kullanıyor - yani "veri kaynağı"
+    PAYLAŞILIYOR, ama "ekran durumu" (state) PAYLAŞILMIYOR, her ekran kendi
+    state'ini KENDİ ViewModel'inde tutuyor. Bu, "tek veri kaynağı, çoklu
+    ekran state'i" deseninin güzel bir örneği.
+
+
  ===========================================================
 */
