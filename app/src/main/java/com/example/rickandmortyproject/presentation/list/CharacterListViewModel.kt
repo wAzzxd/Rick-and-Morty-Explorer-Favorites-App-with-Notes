@@ -299,10 +299,5 @@ class CharacterListViewModel(
     (errorMessage = null, endReached = true) - çünkü "sonuç bulunamadı"
     aslında bir HATA değil, geçerli bir arama SONUCUDUR.
 
- 5) SIRADA NE VAR?
-    CharacterListScreen.kt'ye arama kutusunu (TextField) ve durum filtresi
-    chip'lerini (FilterChip) ekleyeceğiz, onları buradaki
-    onSearchQueryChanged() ve onStatusFilterChanged() fonksiyonlarına
-    bağlayacağız.
  ===========================================================
 */
