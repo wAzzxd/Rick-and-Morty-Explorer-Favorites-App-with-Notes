@@ -2,6 +2,7 @@ package com.example.rickandmortyproject.presentation.list
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.rickandmortyproject.domain.model.Character
 import com.example.rickandmortyproject.domain.repository.CharacterRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -9,6 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -75,6 +77,28 @@ class CharacterListViewModel(
                 resetAndReload()
             }
             .launchIn(viewModelScope)
+
+        // "repository.getFavorites()" -> Room'daki favori listesini CANLI
+        // olarak izliyoruz (Flow olduğu için). Favoriler DEĞİŞTİĞİNDE
+        // (başka bir ekrandan bile eklense/çıkarılsa) bu blok OTOMATİK
+        // tekrar çalışır.
+        //
+        // ".map { favorites -> favorites.map { it.id }.toSet() }" -> gelen
+        // TAM Character listesinden, sadece id'lerini alıp bir Set'e
+        // çeviriyoruz. Set kullanmamızın sebebi: "bu id BU KÜMEDE var mı"
+        // kontrolü (contains), bir List'e göre ÇOK DAHA HIZLI çalışır.
+        //
+        // ".onEach { favoriteIds -> ... }" -> her yeni favoriler kümesi
+        // geldiğinde, ana state'i güncelliyoruz.
+        //
+        // ".launchIn(viewModelScope)" -> yine ViewModel'in ömrüne bağlı,
+        // GÜVENLİ bir şekilde çalışan bir izleyici başlatıyoruz.
+        repository.getFavorites()
+            .map { favorites -> favorites.map { it.id }.toSet() }
+            .onEach { favoriteIds ->
+                _state.update { it.copy(favoriteIds = favoriteIds) }
+            }
+            .launchIn(viewModelScope)
     }
 
     // Compose ekranındaki TextField, kullanıcı her harf yazdığında bu
@@ -113,7 +137,18 @@ class CharacterListViewModel(
                 characters = emptyList(),
                 currentPage = 1,
                 endReached = false,
-                error = null
+                error = null,
+                // "isLoading = false, isLoadingMore = false" -> BU İKİ SATIRI
+                // YENİ EKLEDİK. Neden gerekliydi: loadJob.cancel() ile durdurduğumuz
+                // coroutine, CancellationException'ı artık "throw e" ile tekrar
+                // fırlattığı için (önceki mesajdaki düzeltme), KENDİ isLoading/
+                // isLoadingMore'u false yapan koduna hiç ULAŞAMADAN duruyor. Eğer
+                // burada ELLE sıfırlamasaydık, isLoading SONSUZA KADAR true kalırdı,
+                // bu da loadCharacters()'ın en başındaki "if (isLoading || ...) return"
+                // koruması yüzünden YENİ yüklemenin hiç BAŞLAYAMAMASINA yol açardı -
+                // tam olarak yaşadığın "sürekli dönen yükleniyor ikonu" sorunu buydu.
+                isLoading = false,
+                isLoadingMore = false
             )
         }
         loadCharacters()
@@ -186,6 +221,24 @@ class CharacterListViewModel(
                 // geldiğinde (404, 429, 500 gibi), hatayı bu ÖZEL exception türüyle
                 // fırlatır. ".code()" ile TAM OLARAK hangi HTTP kodu geldiğini
                 // (429, 500 vb.) öğrenebiliyoruz.
+
+
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                // "CancellationException" -> Kotlin Coroutines'in kendi İÇ mekanizması.
+                // Bir coroutine "cancel()" ile durdurulduğunda (bizim resetAndReload()
+                // içinde loadJob?.cancel() dediğimizde olduğu gibi), Kotlin bunu bu
+                // ÖZEL exception türüyle sinyalliyor. Bu bir HATA DEĞİL, coroutine'in
+                // NORMAL şekilde durduğunu belirten bir mekanizma.
+                //
+                // "throw e" -> BU exception türünü YAKALAMIYORUZ, olduğu gibi TEKRAR
+                // fırlatıyoruz. Bu ÇOK ÖNEMLİ bir kural: CancellationException'ı asla
+                // "yutmamalıyız" (yani sessizce yakalayıp yok saymamalıyız) - aksi halde
+                // Kotlin'in "yapılandırılmış eşzamanlılık" (structured concurrency)
+                // sistemi bozulur, coroutine'lerin DÜZGÜN iptal edilip edilmediğini
+                // takip edemez hale geliriz. Kısacası: "gerçek hatalar"ı yakala, ama
+                // "ben zaten iptal edildim" sinyaline DOKUNMA, bırak yoluna devam etsin.
+
+
                 val errorMessage = when {
                     e is retrofit2.HttpException && e.code() == 404 ->
                         // API, arama sonucunda HİÇ karakter bulamazsa 404
@@ -232,6 +285,23 @@ class CharacterListViewModel(
         _state.update { it.copy(error = null) }
         loadCharacters()
     }
+
+    // Kalp butonuna basılınca çağrılacak. Karakter ZATEN favorideyse
+    // ÇIKARIYORUZ, değilse EKLİYORUZ - "toggle" (aç/kapat) mantığı.
+    // Not: state'i BURADA elle güncellemiyoruz! Çünkü yukarıdaki init{}
+    // bloğundaki repository.getFavorites() izleyicisi, Room'daki değişikliği
+    // OTOMATİK yakalayıp state'i kendisi güncelleyecek - biz sadece
+    // Room'a "ekle/çıkar" komutunu veriyoruz, gerisi kendiliğinden akıyor.
+    fun onFavoriteClick(character: Character) {
+        viewModelScope.launch {
+            val isCurrentlyFavorite = _state.value.favoriteIds.contains(character.id)
+            if (isCurrentlyFavorite) {
+                repository.removeFavorite(character)
+            } else {
+                repository.addFavorite(character)
+            }
+        }
+    }
 }
 
 /*
@@ -240,9 +310,10 @@ class CharacterListViewModel(
  1) MVVM BURADA NASIL İŞLİYOR?
     - Model: domain.model.Character ve CharacterRepository (veriyi temsil eden/getiren katman)
     - ViewModel: bu sınıf - state'i tutuyor, iş mantığını (sayfalama, arama, filtre,
-      hata yönetimi) yürütüyor
+      hata yönetimi, favoriler) yürütüyor
     - View: CharacterListScreen.kt - sadece "state.value.characters"a bakıp ekrana
-      çizecek, hiçbir iş mantığı (network, hata yönetimi, debounce) İÇERMEYECEK.
+      çizecek, hiçbir iş mantığı (network, hata yönetimi, debounce, veritabanı)
+      İÇERMEYECEK.
     Bu ayrımın faydası: View'ı (Compose kodunu) değiştirsek bile (örn. XML'e geçsek),
     ViewModel'in TEK SATIRI değişmez - iş mantığı UI'dan tamamen bağımsız.
 
@@ -298,6 +369,41 @@ class CharacterListViewModel(
     kırmızı bir hata mesajı YERİNE, sadece BOŞ bir liste gösteriyoruz
     (errorMessage = null, endReached = true) - çünkü "sonuç bulunamadı"
     aslında bir HATA değil, geçerli bir arama SONUCUDUR.
+ ===========================================================
+*/
 
+/*
+ ==================== KAVRAMSAL NOTLAR - FAVORİLER ====================
+
+ 1) NEDEN "favoriteIds: Set<Int>" TUTUYORUZ, HER Character'IN İÇİNE
+    "isFavorite: Boolean" ALANI EKLEMEDİK?
+    Character, domain modelimiz - API'den gelen SAF veriyi temsil ediyor,
+    favori olup olmadığı bilgisi ONUN sorumluluğunda değil (Single
+    Responsibility). Bunun yerine, "favoride olan id'lerin kümesi" diye
+    AYRI bir bilgi tutup, ekranda "bu id kümede var mı" diye kontrol ederek
+    kalp ikonunu dolduruyoruz - CharacterCard'a bakarsan, isFavorite
+    parametresini ZATEN dışarıdan (state.favoriteIds.contains(character.id)
+    şeklinde) alacak.
+
+ 2) NEDEN state GÜNCELLEMESİNİ "onFavoriteClick" İÇİNDE ELLE YAPMIYORUZ?
+    Çünkü Room'daki DAO fonksiyonumuz (getAllFavorites) bir Flow döndürüyordu -
+    yani Room'un KENDİSİ, veritabanında bir DEĞİŞİKLİK olduğunda bunu bize
+    OTOMATİK haber veriyor. Biz sadece "ekle" ya da "çıkar" komutunu Room'a
+    iletiyoruz, Room değişikliği yapınca Flow tetikleniyor, init{} bloğundaki
+    izleyicimiz bunu YAKALAYIP state'i GÜNCELLIYOR. Bu, "tek gerçek kaynak"
+    (single source of truth) prensibinin güzel bir örneği: favori bilgisinin
+    TEK sahibi Room, ViewModel sadece onu YANSITIYOR.
+
+ 3) BU YAKLAŞIMIN FAYDASI NE, GERÇEK HAYATTA NE İŞE YARAR?
+    Diyelim kullanıcı liste ekranındayken bir karakteri favoriye ekledi.
+    Sonra favoriler sekmesine geçti - orada da AYNI Room veritabanını
+    izleyen BAŞKA bir ViewModel olacak, o da OTOMATİK olarak yeni favoriyi
+    görecek, çünkü ikisi de AYNI "tek gerçek kaynağı" (Room) izliyor. Elle
+    "iki ekranı da senkronize et" diye bir şey yazmamıza HİÇ gerek kalmıyor.
+
+ 4) SIRADA
+    CharacterListScreen.kt'de, isFavorite = false ve onFavoriteClick = { }
+    sabit değerlerini, GERÇEK state.favoriteIds.contains(character.id) ve
+    viewModel.onFavoriteClick(character) çağrılarıyla değiştireceğiz.
  ===========================================================
 */

@@ -59,7 +59,18 @@ data class CharacterListState(
 
     val searchQuery: String = "",      // kullanıcının arama kutusuna yazdığı anlık metin
 
-    val statusFilter: String? = null   // seçili durum filtresi: "Alive", "Dead", "unknown" ya da null (filtre yok)
+    val statusFilter: String? = null,  // seçili durum filtresi: "Alive", "Dead", "unknown" ya da null (filtre yok)
+
+    // Room'daki (Favoriler tablosundaki) TÜM favori karakterlerin id'lerinin
+    // kümesi. "Set<Int>" -> tekrarsız, HIZLI arama yapılabilen bir koleksiyon
+    // türü. Her karakterin favoride olup olmadığını "favoriteIds.contains(id)"
+    // ile ANINDA kontrol edebiliyoruz. Bu bilgiyi TEK TEK her Character'ın
+    // içine (isFavorite: Boolean gibi) EKLEMEK yerine, AYRI bir küme olarak
+    // tutmamızın sebebi: Character, domain modelimiz - API'den gelen SAF
+    // veriyi temsil ediyor, favori olup olmadığı bilgisi ONUN sorumluluğunda
+    // değil (Single Responsibility). ViewModel, Room'daki favori listesini
+    // CANLI izleyip bu kümeyi GÜNCEL tutuyor.
+    val favoriteIds: Set<Int> = emptySet()
 )
 
 /*
@@ -85,9 +96,9 @@ data class CharacterListState(
  3) BU SINIF NEREDE KULLANILACAK?
     - CharacterListViewModel içinde: _state (yazılabilir) ve state (sadece
       okunabilir) olarak tutulacak, ViewModel bu state'i sürekli günceller.
-    - Az sonra yazacağımız Compose ekranında: "val state by viewModel.state
-      .collectAsState()" diyerek bu state'i İZLEYECEĞİZ, her değiştiğinde
-      Compose ekranı OTOMATİK olarak yeniden çizilecek (recomposition).
+    - CharacterListScreen'de: "val state by viewModel.state.collectAsState()"
+      diyerek bu state'i İZLEYECEĞİZ, her değiştiğinde Compose ekranı OTOMATİK
+      olarak yeniden çizilecek (recomposition).
 
  4) NEDEN "var" DEĞİL DE HEP "val" KULLANDIK?
     Character modelinde anlattığımız aynı mantık: bu alanların kendisi
@@ -95,5 +106,12 @@ data class CharacterListState(
     Bir state'i "güncellemek" istediğimizde, VAR OLAN nesneyi değiştirmiyoruz,
     copy() ile TAMAMEN YENİ bir state nesnesi üretiyoruz. Bu, hataları önleyen
     (immutability) modern Kotlin/Compose pratiğidir.
+
+ 5) "favoriteIds" NEDEN Set<Int>, LİSTE (List<Int>) DEĞİL?
+    Ekranda her kart için "bu karakter favoride mi" kontrolü SÜREKLİ yapılıyor
+    (her recomposition'da). Bir List'te "içinde var mı" kontrolü (contains),
+    listenin başından SONUNA kadar TEK TEK bakar (yavaş). Set'te ise bu kontrol
+    ÇOK DAHA HIZLI çalışır - listemiz büyüdükçe (yüzlerce karakter) bu fark
+    önemli hale gelir.
  ===========================================================
 */

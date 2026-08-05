@@ -7,6 +7,8 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
 
+//uygulamanın kodları ile veritabanı arasındaki köprü kısmı
+
 // "@Dao" -> Room'a "bu interface, veritabanıyla ilgili SORGULARI tarif
 // ediyor" diyoruz. RickAndMortyApi'yi Retrofit'e nasıl tarif ettiysek,
 // bunu da Room'a AYNI mantıkla tarif ediyoruz - gerçek kodu Room, arka
