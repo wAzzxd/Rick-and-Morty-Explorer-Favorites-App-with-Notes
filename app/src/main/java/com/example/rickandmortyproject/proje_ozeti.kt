@@ -93,6 +93,11 @@ package com.example.rickandmortyproject.presentation
     single<CharacterRepository>    -> hem api hem dao alarak Impl'i üretiyor
     viewModel { CharacterListViewModel(get()) }
     viewModel { FavoritesViewModel(get()) }
+    viewModel { params -> CharacterDetailViewModel(params.get(), get()) }
+        -> BU SONUNCUSU DİĞERLERİNDEN FARKLI: "characterId" gibi HER
+        ekran açılışında DEĞİŞEBİLEN bir parametre alıyor, Compose
+        tarafındaki "koinViewModel { parametersOf(characterId) }" çağrısı
+        bu değeri "params" olarak Koin'e taşıyor.
 
  di/RickAndMortyApplication.kt -> Application sınıfından miras alan,
  uygulama AÇILIR AÇILMAZ çalışan özel sınıfımız. onCreate() içinde
@@ -135,13 +140,28 @@ package com.example.rickandmortyproject.presentation
  LazyRow içinde), infinite scroll (LazyListState + derivedStateOf +
  LaunchedEffect), loading/hata/boş-sonuç/liste durumlarını when{} ile
  yönetiyor, hem tam ekran hem "liste sonunda küçük" Tekrar Dene butonları
- var. HİÇBİR iş mantığı içermiyor, sadece state'i okuyup çiziyor.
+ var. "onCharacterClick: (Int) -> Unit" parametresiyle, tıklanan karakterin
+ id'sini YUKARI (NavGraph'a) fırlatıyor - navigasyon KARARINI kendisi
+ vermiyor. HİÇBİR iş mantığı içermiyor, sadece state'i okuyup çiziyor.
 
  presentation/list/CharacterCard.kt -> tek bir karakterin kart tasarımı.
  Coil AsyncImage, durum renkli nokta (when), kalp butonu. "STATELESS
  composable" - isFavorite/onCardClick/onFavoriteClick parametrelerini
  DIŞARIDAN alıyor, kendi karar vermiyor (state hoisting). Bu sayede AYNI
  kart, hem liste ekranında hem favoriler ekranında TEKRAR KULLANILIYOR.
+ Kalp butonunda Animatable + LaunchedEffect(isFavorite) ile "büyüyüp
+ küçülme" (spring/bounce) animasyonu var - isFavorite HER değiştiğinde
+ (eklerken de çıkarırken de) tetikleniyor.
+
+ presentation/list/ShimmerEffect.kt -> Modifier.shimmerEffect() adlı bir
+ EXTENSION FUNCTION: rememberInfiniteTransition + animateFloat ile SÜREKLİ
+ (0'dan 1000'e, tekrar tekrar) değişen bir animasyon değeri üretip, bunu
+ bir Brush.linearGradient'in başlangıç/bitiş noktalarına bağlıyor - bu da
+ "soldan sağa akan parlak huzme" hissini veriyor. ShimmerCharacterCard
+ (gerçek kartın gri iskelet hâli) ve ShimmerCharacterList (6 tanesini
+ LazyColumn'da art arda gösteren) Composable'ları da burada. Liste
+ ekranında state.isLoading true iken, CircularProgressIndicator YERİNE
+ bu shimmer listesi gösteriliyor.
 
  8) PRESENTATION KATMANI - Favoriler Ekranı (MVVM)
  --------------------------------------------------------
@@ -157,42 +177,104 @@ package com.example.rickandmortyproject.presentation
  mesaj, doluysa LazyColumn + CharacterCard (isFavorite HER ZAMAN true,
  onFavoriteClick DOĞRUDAN kaldırma).
 
- KRİTİK KAVRAM: Liste ekranı VE favoriler ekranı, AYNI CharacterRepository'yi
+ KRİTİK KAVRAM: Liste, favoriler VE detay ekranı, AYNI CharacterRepository'yi
  (dolayısıyla AYNI Room veritabanını) Koin üzerinden paylaşıyor. Biri
- favoriye ekleyince, diğeri bunu Flow sayesinde OTOMATİK görüyor - hiçbir
+ favoriye ekleyince, diğerleri bunu Flow sayesinde OTOMATİK görüyor - hiçbir
  manuel senkronizasyon kodu YOK.
 
- 9) NAVİGASYON - NavGraph.kt
+ 9) PRESENTATION KATMANI - Detay Ekranı (MVVM)
+ --------------------------------------------------
+ presentation/detail/CharacterDetailState.kt -> character (nullable! "boş
+ karakter" diye bir şey olmadığı için null kullanıyoruz), isLoading,
+ isFavorite, error alanlarını tutan basit bir state.
+
+ presentation/detail/CharacterDetailViewModel.kt -> DİĞER ViewModel'lerden
+ FARKI: constructor'da "characterId: Int" alıyor (Koin'e parametersOf ile
+ GEÇİRİLİYOR). repository.getCharacterById(characterId) ile TEK bir
+ karakteri çekiyor, repository.isFavorite(characterId) Flow'unu izleyip
+ kalp durumunu GÜNCEL tutuyor. onFavoriteClick() burada PARAMETRE almıyor
+ (CharacterListViewModel'deki gibi) çünkü zaten TEK bir karakterle
+ ilgileniyor, state.character'ı DOĞRUDAN kullanabiliyor.
+
+ presentation/detail/CharacterDetailScreen.kt -> Büyük profil resmi
+ (tıklanınca tam ekran açılan), isim+kalp, durum, tür/cinsiyet/köken/
+ bölüm sayısı satırları. İKİ AYRI AnimatedVisibility var:
+    - Biri (visible=true SABİT): ekranın TÜM içeriğinin fadeIn+
+      slideInVertically ile "belirerek ve aşağıdan kayarak" GİRİŞ yapması
+      için - SADECE character verisi GELDİĞİNDE (state.character != null
+      bloğunun İÇİNDE) tetikleniyor.
+    - Diğeri (visible=isImageExpanded DEĞİŞKEN): resme tıklayınca AÇILAN,
+      tekrar tıklayınca KAPANAN tam ekran resim overlay'i - scaleIn/
+      scaleOut ile küçükten büyüğe/büyükten küçüğe animasyonlu.
+ "isImageExpanded" gibi SADECE-UI'a-ait, GEÇİCİ state'ler ViewModel'de
+ DEĞİL, doğrudan Composable içinde "remember { mutableStateOf(false) }"
+ ile tutuluyor - ViewModel'e taşımaya gerek yok çünkü hiçbir iş mantığı
+ (network, veritabanı) içermiyor.
+
+ 10) NAVİGASYON - NavGraph.kt
  --------------------------------
  sealed class Screen -> tüm route'ları TEK bir yerde, güvenli şekilde
- (yazım hatasına kapalı) tanımlıyor.
+ (yazım hatasına kapalı) tanımlıyor. CharacterDetail route'u
+ "character_detail/{characterId}" şeklinde bir YER TUTUCU içeriyor,
+ createRoute(id) fonksiyonu bu yer tutucuyu GERÇEK id ile dolduruyor.
+
  AppNavGraph -> NavHost ile hangi route'ta hangi ekranın gösterileceğini
- eşliyor. MainActivity, DOĞRUDAN CharacterListScreen değil, SADECE
- AppNavGraph()'ı çağırıyor (bir ekranı birden fazla yerden çağırmanın
- çift-render hatasına yol açtığını YAŞAYARAK öğrendik).
+ eşliyor. composable(...) bloğuna "arguments = listOf(navArgument(...))"
+ vererek, route'taki "{characterId}" kısmının GERÇEKTE bir Int olduğunu
+ Navigation kütüphanesine bildiriyoruz - bu sayede backStackEntry.arguments?.
+ getInt("characterId") ile GÜVENLE, doğru TÜRDE çekebiliyoruz.
 
- 10) MAINACTIVITY - HER ŞEYİN BAĞLANDIĞI YER
- ------------------------------------------------
- setContent { } içinde Scaffold + AppNavGraph() çağrılıyor. Bu, tüm
- katmanların (Retrofit/Room -> Repository -> Koin -> ViewModel -> Compose)
- bir araya gelip ÇALIŞTIĞI nokta.
+ MainActivity, DOĞRUDAN CharacterListScreen değil, SADECE AppNavGraph()'ı
+ çağırıyor (bir ekranı birden fazla yerden çağırmanın çift-render hatasına
+ yol açtığını YAŞAYARAK öğrendik). navController, MainActivity seviyesinde
+ oluşturulup HEM Bottom Navigation'a HEM AppNavGraph'a PARAMETRE olarak
+ geçiriliyor - ikisi AYNI navigasyon "beynini" paylaşıyor.
 
- 11) TAMAMLANAN ÖZELLİKLER (bugüne kadar)
- ----------------------------------------------
-    ✅ Sayfalama + Infinite scroll
-    ✅ Arama çubuğu + 300ms debounce
-    ✅ Durum filtre chip'leri (Alive/Dead/unknown, toggle mantığıyla)
-    ✅ Hata yönetimi (404/429/500/internet yok, ayrı ayrı mesajlarla) +
+ KRİTİK KAVRAM: CharacterListScreen ve CharacterDetailScreen, navController'ı
+ HİÇ TANIMIYOR - sadece "şuna tıklandı" / "geri gidilmek istendi" bilgisini
+ YUKARI (NavGraph'a) fırlatıyorlar, GERÇEK navigasyon kararını NavGraph
+ veriyor (state hoisting'in navigasyon versiyonu).
+
+ 11) MAINACTIVITY - HER ŞEYİN BAĞLANDIĞI YER + BOTTOM NAVIGATION
+ ------------------------------------------------------------------
+ setContent { } içinde Scaffold(bottomBar = { AppBottomNavigationBar(...) })
+ + AppNavGraph() çağrılıyor. Bottom Navigation'daki her sekme,
+ popUpTo + launchSingleTop + restoreState üçlüsüyle (Google'ın ÖNERDİĞİ
+ standart kalıp) geçiş yapıyor - bu sayede geri tuşu sekme sekme değil
+ doğrudan uygulamadan çıkıyor, aynı sekmeye tekrar basmak ekran yığmıyor,
+ her sekme kaldığı yeri hatırlıyor.
+
+ Bu, tüm katmanların (Retrofit/Room -> Repository -> Koin -> ViewModel ->
+ Compose -> Navigation) bir araya gelip ÇALIŞTIĞI nokta.
+
+ 12) TAMAMLANAN ÖZELLİKLER (proje dokümanındaki TÜM maddeler)
+ ----------------------------------------------------------------
+     Sayfalama + Infinite scroll
+     Arama çubuğu + 300ms debounce
+     Shimmer loading efekti (kayan parlaklık huzmeli gri iskelet kartlar)
+     Hata yönetimi (404/429/500/internet yok, ayrı ayrı mesajlarla) +
        Tekrar Dene butonu (kaldığı sayfadan devam eder)
-    ✅ Room veritabanı + gerçek favori ekleme/çıkarma
-    ✅ Favoriler ekranı (ayrı ViewModel + Screen)
+     Detay ekranı (büyük resim, durum, tür, cinsiyet, köken, bölüm sayısı)
+     Fade-in/slide-in animasyonu (detay ekranı içeriğinin girişi)
+     Resme tıklayınca tam ekran büyütme (scale animasyonuyla açılıp kapanan overlay)
+     Kalp butonu scale/spring (büyüyüp küçülme) animasyonu
+     Room veritabanı + gerçek favori ekleme/çıkarma (hem listede hem detayda)
+     Favoriler ekranı + Bottom Navigation (Liste/Favoriler sekmeleri)
 
- 12) BURADAN SONRASI (henüz yapılmadı, planlanan sıra)
- ----------------------------------------------------------
-    - Bottom Navigation (Liste / Favoriler sekmeleri)
-    - Shimmer loading efekti (şu an sade bir CircularProgressIndicator var)
-    - Detay ekranı (büyük resim, origin, episode sayısı vb.)
-    - Fade-in/slide-in animasyonları, resme tıklayınca tam ekran büyütme
-    - Kalp butonuna scale/spring animasyonu
+ 13) ÖĞRENDİĞİMİZ ÖNEMLİ HATA/DERS NOTLARI
+ ----------------------------------------------
+    - LazyColumn öğelerine "key" vermemek, kaydırırken içeriklerin
+      birbirine karışmasına yol açabiliyor.
+    - Bir ekranı BİRDEN FAZLA yerden çağırmak (MainActivity + NavGraph gibi)
+      çift-render'a, üst üste binmiş görüntüye yol açıyor.
+    - Coroutine iptali (CancellationException), catch (e: Exception)
+      bloğunda YANLIŞLIKLA gerçek hata gibi ele alınabiliyor - "throw e"
+      ile bunu SPESIFIK olarak tekrar fırlatmak gerekiyor.
+    - Bir coroutine'i loadJob.cancel() ile iptal etmek, o coroutine'in
+      isLoading/isLoadingMore gibi state alanlarını KENDİ BAŞINA false
+      yapmasını ENGELLİYOR - iptal eden tarafın bunu ELLE sıfırlaması gerekiyor.
+    - AnimatedVisibility, bazı Compose sürümlerinde ColumnScope'a özel bir
+      versiyonla KARIŞABİLİYOR - tam paket yolunu (androidx.compose.animation.
+      AnimatedVisibility) yazmak bu belirsizliği çözüyor.
 ====================================================================
 */

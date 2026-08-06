@@ -38,6 +38,14 @@ fun CharacterListScreen(
     // boyut/padding gibi şeyleri dışarıdan kontrol edebilmesi için.
     modifier: Modifier = Modifier,
 
+    // YENİ EKLENEN: bir karta tıklandığında, hangi karakterin id'sine
+    // tıklandığını YUKARI (NavGraph'a) fırlatan fonksiyon. Bu ekran,
+    // navController'ı hiç TANIMIYOR - sadece "şu id'ye tıklandı" bilgisini
+    // dışarı veriyor, NAVİGASYON KARARINI (nereye gidileceğini) NavGraph
+    // veriyor. Bu da state hoisting'in AYNI prensibi: karar verme yetkisini
+    // ÜST katmana bırakıyoruz.
+    onCharacterClick: (Int) -> Unit = {},
+
     // "koinViewModel()" -> Koin'e "bana bir CharacterListViewModel ver" diyoruz.
     // Koin, AppModule.kt'de yazdığımız tarife göre bunu otomatik oluşturup verir.
     viewModel: CharacterListViewModel = koinViewModel()
@@ -82,43 +90,24 @@ fun CharacterListScreen(
 
         // "OutlinedTextField" -> Material Design'ın çerçeveli metin kutusu.
         OutlinedTextField(
-            // "value = state.searchQuery" -> kutunun İÇİNDEKİ metin, DOĞRUDAN
-            // state'ten okunuyor - yani ViewModel'deki değer TEK GERÇEK KAYNAK
-            // (single source of truth), TextField kendi başına bir metin
-            // TUTMUYOR, sadece state'i YANSITIYOR.
             value = state.searchQuery,
-            // "onValueChange" -> kullanıcı her HARF yazdığında/sildiğinde
-            // tetiklenir, ViewModel'e "işte yeni metin" diye haber veriyoruz.
-            // (ViewModel bu metni hem ANINDA state'e yazıyordu, hem de
-            // debounce'lu searchQueryFlow üzerinden GERÇEK aramayı tetikliyordu.)
             onValueChange = { newQuery -> viewModel.onSearchQueryChanged(newQuery) },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             placeholder = { Text("Karakter ara...") },
             leadingIcon = { Icon(Icons.Filled.Search, contentDescription = "Ara") },
-            singleLine = true // metin kutusunun TEK SATIR kalmasını, Enter'a basınca alt satıra geçmemesini sağlıyor
+            singleLine = true
         )
 
-        // "LazyRow" -> LazyColumn'un YATAY versiyonu. Chip sayısı ekrana
-        // sığmasa bile YANA doğru kaydırılabilir, performanslı bir liste.
+        // "LazyRow" -> LazyColumn'un YATAY versiyonu.
         LazyRow(
             modifier = Modifier.fillMaxWidth(),
             contentPadding = PaddingValues(horizontal = 12.dp)
         ) {
-            // Göstereceğimiz 3 durum: Alive, Dead, unknown. Bunu bir liste
-            // olarak tanımlayıp items() ile TEK TEK chip'e çeviriyoruz -
-            // aynı kodu 3 KERE elle yazmak yerine.
             items(listOf("Alive", "Dead", "unknown")) { status ->
-                // "FilterChip" -> Material'ın "seçilebilir etiket" bileşeni,
-                // seçiliyken farklı renkte/ikonlu görünür.
                 FilterChip(
-                    // "selected" -> bu chip'in ŞU AN seçili olup olmadığını
-                    // state.statusFilter ile KARŞILAŞTIRARAK belirliyoruz.
                     selected = state.statusFilter == status,
-                    // Tıklanınca ViewModel'e "bu durumu seç/kaldır" diyoruz
-                    // (ViewModel'deki onStatusFilterChanged zaten TOGGLE
-                    // mantığını içeriyordu - aynı chip'e tekrar basılırsa kaldırır).
                     onClick = { viewModel.onStatusFilterChanged(status) },
                     label = { Text(status) },
                     modifier = Modifier.padding(end = 8.dp)
@@ -126,25 +115,21 @@ fun CharacterListScreen(
             }
         }
 
-        // "Box(modifier = Modifier.weight(1f)...)" -> ".weight(1f)" SADECE
-        // Column/Row içinde çalışan bir modifier: "kalan TÜM boşluğu bu Box
-        // doldursun" demek. Arama kutusu ve chip'ler kendi doğal boyutlarını
-        // alırken, listenin geri kalan TÜM alanı kaplamasını sağlıyor.
         Box(modifier = Modifier.weight(1f).fillMaxSize()) {
-
-            // "when { }" -> state'in içindeki değerlere göre HANGİ UI'ın
-            // çizileceğine karar veriyoruz. Sıralama ÖNEMLİ: Kotlin, YUKARIDAN
-            // AŞAĞI kontrol eder, İLK eşleşen koşulu çalıştırır.
             when {
-                // Durum 1: İlk yükleme sürüyor (henüz hiç karakter yok).
+                // DEĞİŞTİ: eskiden burada tek başına ortalanmış bir
+                // CircularProgressIndicator vardı - artık YERİNE
+                // ShimmerCharacterList() çağrılıyor. Bu fonksiyon,
+                // ShimmerEffect.kt dosyasında yazdığımız, gerçek kartların
+                // İSKELETİNİ taklit eden, gri/parlayan 6 tane sahte kart
+                // gösteren bir LazyColumn. Kullanıcı "boş beyaz ekran +
+                // tek bir dönen çark" yerine, "birazdan burada kartlar
+                // olacak" hissi veren, daha modern bir yükleme deneyimi
+                // görüyor.
                 state.isLoading -> {
-                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                    ShimmerCharacterList()
                 }
 
-                // Durum 2: Bir hata var VE elimizde HİÇ karakter yok (yani bu
-                // İLK yükleme sırasında oluşan bir hata). Bu durumda TAM EKRAN
-                // hata + Tekrar Dene butonu gösteriyoruz, çünkü gösterecek
-                // başka hiçbir şey yok zaten.
                 state.error != null && state.characters.isEmpty() -> {
                     Column(modifier = Modifier.align(Alignment.Center)) {
                         Text(text = "Hata: ${state.error}")
@@ -154,12 +139,6 @@ fun CharacterListScreen(
                     }
                 }
 
-                // Durum 3: Arama/filtre SONUCUNDA hiç karakter bulunamadıysa
-                // (liste boş, ama hata da yok, isLoading da false) -> kullanıcıya
-                // "sonuç bulunamadı" diye bir mesaj gösterelim, boş beyaz ekran
-                // YERİNE. Bu durum, ViewModel'in 404'ü "hata" değil "boş sonuç"
-                // olarak ele almasıyla (errorMessage = null, endReached = true)
-                // mümkün oluyor.
                 state.characters.isEmpty() && !state.isLoading -> {
                     Text(
                         text = "Sonuç bulunamadı",
@@ -167,58 +146,40 @@ fun CharacterListScreen(
                     )
                 }
 
-                // Durum 4 (else): Elimizde EN AZ bir karakter var, listeyi çiziyoruz.
                 else -> {
-                    // "state = listState" -> LazyColumn'a, az önce oluşturduğumuz
-                    // kaydırma durumunu VERİYORUZ. Bu bağlantı sayesinde
-                    // listState.layoutInfo yukarıdaki hesaplamada GÜNCEL kalıyor.
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         state = listState
                     ) {
-                        // "items(...)" -> listedeki HER BİR Character için bir kart üretiyor.
-                        //
-                        // "key = { character -> character.id }" -> LazyColumn, ekrandan
-                        // çıkan kartları YOK ETMİYOR, YENİDEN KULLANIYOR (recycle). Bu key
-                        // sayesinde Compose, hangi kartın hangi karaktere ait olduğunu HER
-                        // ZAMAN doğru takip ediyor - kaydırırken/yeni sayfa eklenirken
-                        // kartların içeriğinin birbirine karışmasını önlüyor.
                         items(
                             items = state.characters,
                             key = { character -> character.id }
                         ) { character ->
 
-                            // Ayrı bir dosyada (CharacterCard.kt) yazdığımız kart
-                            // tasarımını burada ÇAĞIRIYORUZ.
                             CharacterCard(
                                 character = character,
-
-                                // Artık SABİT false DEĞİL - state.favoriteIds kümesinde
-                                // bu karakterin id'si VAR MI diye GERÇEKTEN kontrol
-                                // ediyoruz. Bu küme, ViewModel'de Room'u izleyerek
-                                // CANLI tutuluyordu - bu yüzden favoriye ekleyip/
-                                // çıkardığında kalp ikonu ANINDA (Room güncellenir
-                                // güncellenmez) doğru görünecek.
                                 isFavorite = state.favoriteIds.contains(character.id),
 
-                                // Detay ekranını yazınca burada navigasyon kodu olacak
-                                // (navController.navigate(...) gibi).
-                                onCardClick = { },
+                                // DEĞİŞTİ: artık boş lambda DEĞİL - tıklandığında
+                                // dışarıdan gelen onCharacterClick'i, TIKLANAN
+                                // karakterin id'siyle ÇAĞIRIYORUZ. NavGraph'taki
+                                // "onCharacterClick = { characterId -> navController.
+                                // navigate(...) }" tanımı sayesinde bu, GERÇEKTEN
+                                // detay ekranına geçiş yapacak.
+                                onCardClick = { onCharacterClick(character.id) },
 
-                                // Kalbe tıklanınca ViewModel'deki toggle fonksiyonunu
-                                // çağırıyoruz. ViewModel zaten "favoride mi değil mi"
-                                // kontrolünü kendi içinde yapıp Room'a ekleme/çıkarma
-                                // komutunu veriyordu - biz burada sadece "TIKLANDI"
-                                // bilgisini YUKARI (ViewModel'e) fırlatıyoruz, kararı
-                                // ViewModel veriyor (state hoisting prensibi).
                                 onFavoriteClick = { viewModel.onFavoriteClick(character) }
                             )
                         }
 
-                        // "item { }" -> LazyColumn'a, listedeki TÜM karakterlerden
-                        // SONRA, EN ALTA TEK BİR öğe daha ekliyoruz. Bu satır üç
-                        // farklı duruma göre üç farklı şey gösterir: sayfa sonu
-                        // yükleniyor, sayfa sonu hata verdi, ya da hiçbiri.
+                        // NOT: burada, sayfa sonu yüklenirken (isLoadingMore)
+                        // shimmer KULLANMADIK, sade bir CircularProgressIndicator
+                        // bıraktık. Sebep: shimmer, "büyük bir bölge YÜKLENİYOR"
+                        // hissini vermek için güzel (ilk açılış gibi), ama
+                        // "listenin altına küçük bir ekleme yapılıyor" durumunda
+                        // küçük bir dönen çark zaten yeterli ve daha SADE -
+                        // her yükleme durumunu shimmer yapmak GEREKMİYOR,
+                        // duruma uygun olanı seçmek önemli.
                         item {
                             Box(
                                 modifier = Modifier
@@ -226,17 +187,11 @@ fun CharacterListScreen(
                                     .padding(16.dp),
                             ) {
                                 when {
-                                    // Sayfa sonu yükleniyor -> küçük dönen çark.
                                     state.isLoadingMore -> {
                                         CircularProgressIndicator(
                                             modifier = Modifier.align(Alignment.Center)
                                         )
                                     }
-                                    // Sayfa sonu YÜKLENİRKEN hata oluştu (örn. 429) ->
-                                    // KÜÇÜK bir hata mesajı + Tekrar Dene butonu,
-                                    // ÜSTTEKİ liste hiç kaybolmadan. Kullanıcı butona
-                                    // bastığında viewModel.retry() çağrılır, o da
-                                    // currentPage'i SIFIRLAMADAN kaldığı sayfadan devam eder.
                                     state.error != null -> {
                                         Column(modifier = Modifier.align(Alignment.Center)) {
                                             Text(text = state.error ?: "")
@@ -245,8 +200,6 @@ fun CharacterListScreen(
                                             }
                                         }
                                     }
-                                    // Hiçbir şey yükleniyor/hatalı değilse -> boş bırak,
-                                    // gösterecek bir şey yok.
                                     else -> { }
                                 }
                             }
@@ -264,7 +217,8 @@ fun CharacterListScreen(
  1) BU DOSYA, MVVM'İN HANGİ KATMANI?
     Bu, "View" katmanı - SADECE state'e bakıp ekranı çiziyor, hiçbir iş mantığı
     (network isteği, hata yönetimi kararı, sayfalama hesaplaması, veritabanı
-    işlemi) İÇERMİYOR. Tüm o mantık CharacterListViewModel içinde.
+    işlemi, NAVİGASYON KARARI) İÇERMİYOR. Tüm o mantık ViewModel'de veya
+    (navigasyon için) NavGraph'ta.
 
  2) "state.isLoading", "state.error", "state.characters", "state.favoriteIds"
     NEREDEN GELİYOR?
@@ -275,6 +229,13 @@ fun CharacterListScreen(
     Listemiz SÜREKLİ BÜYÜYOR (infinite scroll ile yeni sayfalar ekleniyor) ve
     kullanıcı sürekli kaydırıyor. Bu durumda key vermek, Compose'un hangi
     kartın hangi veriye ait olduğunu KARIŞTIRMAMASI için gereklidir.
+
+ 4) "onCharacterClick: (Int) -> Unit = {}" NEDEN VARSAYILAN DEĞERİ BOŞ BİR
+    LAMBDA ({})?
+    Bu, bu ekranı ÇAĞIRAN her yerin MUTLAKA bir tıklama davranışı vermek
+    ZORUNDA olmamasını sağlıyor - örneğin bu ekranı ileride bir ÖNİZLEME
+    (Preview) fonksiyonunda test ederken, navigasyon parametresi VERMEDEN
+    de kullanabiliriz, hiçbir şey çökmez, sadece tıklama HİÇBİR ŞEY yapmaz.
  ===========================================================
 */
 
@@ -303,23 +264,15 @@ fun CharacterListScreen(
 
  1) "value = state.searchQuery" NEDEN TextField'IN KENDİ İÇ STATE'İ DEĞİL DE
     DIŞARIDAN (ViewModel'den) GELİYOR?
-    Buna "state hoisting" denir - Compose'un temel prensiplerinden biri.
-    TextField'ın kendi başına bir hafızası OLMASAYDI (yani sadece dışarıdan
-    verilen değeri gösterseydi), ViewModel'deki state TEK GERÇEK KAYNAK
-    olurdu. Bu sayede ekran döndürülse, süreç yeniden başlasa bile ViewModel
-    hayatta kaldığı sürece arama metni KAYBOLMAZ.
+    Buna "state hoisting" denir. TextField'ın kendi başına bir hafızası
+    OLMASAYDI, ViewModel'deki state TEK GERÇEK KAYNAK olurdu.
 
  2) FilterChip'İN "selected" PARAMETRESİ NASIL ÇALIŞIYOR?
-    state.statusFilter, ya null (hiçbir filtre seçili değil) ya da "Alive"/
-    "Dead"/"unknown" string'lerinden biri. Her chip kendi status değerini
-    bu alanla KARŞILAŞTIRIYOR - eşleşiyorsa "selected = true" olup görsel
-    olarak vurgulanıyor.
+    state.statusFilter, ya null ya da "Alive"/"Dead"/"unknown" string'lerinden
+    biri. Her chip kendi status değerini bu alanla KARŞILAŞTIRIYOR.
 
  3) "Sonuç bulunamadı" MESAJI NE ZAMAN ÇIKIYOR?
-    state.characters boşken VE isLoading false iken. Bu durum hem "arama
-    sonucu hiçbir şey bulunamadı" (API 404 döndürdü, ViewModel bunu hata
-    değil boş sonuç olarak işledi) hem de teorik olarak "henüz hiç veri
-    gelmemiş ama yüklenmiyor da" durumlarını kapsıyor.
+    state.characters boşken VE isLoading false iken.
  ===========================================================
 */
 
@@ -328,9 +281,8 @@ fun CharacterListScreen(
 
  1) "isFavorite = state.favoriteIds.contains(character.id)" NEDEN HER
     RECOMPOSITION'DA YENİDEN HESAPLANIYOR, SORUN OLMUYOR MU?
-    Set'te "contains" kontrolü ÇOK HIZLI çalıştığı için (Set<Int>'in temel
-    özelliği), listedeki her karakter için bu kontrolü yapmak performans
-    sorunu YARATMIYOR - yüzlerce karakter olsa bile.
+    Set'te "contains" kontrolü ÇOK HIZLI çalıştığı için performans sorunu
+    YARATMIYOR - yüzlerce karakter olsa bile.
 
  2) KALP BUTONUNA BASINCA EKRANDA NE OLUYOR, ADIM ADIM?
     a) Kullanıcı kalbe basar -> onFavoriteClick lambda'sı çalışır
@@ -339,9 +291,53 @@ fun CharacterListScreen(
     d) Room değişir -> repository.getFavorites() Flow'u YENİ bir liste yayınlar
     e) ViewModel'deki init{} bloğundaki izleyici bunu yakalar, state.favoriteIds
        GÜNCELLENİR
-    f) state değiştiği için CharacterListScreen OTOMATİK yeniden çizilir
-       (recomposition), kalp ikonu YENİ duruma göre güncellenir
-    Bu ZİNCİRİN HİÇBİR YERİNDE biz elle "ekranı yenile" DEMEDİK - hepsi
-    reaktif (Flow tabanlı) veri akışı sayesinde KENDİLİĞİNDEN oluyor.
+    f) state değiştiği için ekran OTOMATİK yeniden çizilir, kalp ikonu
+       YENİ duruma göre güncellenir
+    Bu ZİNCİRİN HİÇBİR YERİNDE biz elle "ekranı yenile" DEMEDİK.
+ ===========================================================
+*/
+
+/*
+ ==================== KAVRAMSAL NOTLAR - NAVİGASYON (BU EKRANDAKİ KISIM) ====================
+
+ 1) KARTA TIKLANINCA EKRANDA NE OLUYOR, ADIM ADIM?
+    a) Kullanıcı karta basar -> CharacterCard'daki "clickable" tetiklenir
+    b) onCardClick lambda'sı çalışır -> "onCharacterClick(character.id)" çağrılır
+    c) Bu fonksiyon, NavGraph.kt'de CharacterListScreen çağrılırken VERİLEN
+       lambda'ya bağlı: "onCharacterClick = { characterId -> navController.
+       navigate(Screen.CharacterDetail.createRoute(characterId)) }"
+    d) navController, "character_detail/5" gibi bir route'a GEÇİŞ yapar
+    e) NavHost, bu route'u tanıyıp CharacterDetailScreen'i, doğru
+       characterId ile ÇİZER
+    Bu ekran (CharacterListScreen), navController'ın VARLIĞINDAN bile
+    HABERSİZ - sadece "id'si X olan bir karaktere tıklandı" diyor, GERİ
+    KALAN her şeyi üst katman (NavGraph) hallediyor.
+ ===========================================================
+*/
+
+/*
+ ==================== KAVRAMSAL NOTLAR - SHIMMER (YENİ EKLENEN) ====================
+
+ 1) "ShimmerCharacterList()" NEREDEN GELİYOR, BU DOSYADA IMPORT YOK NEDEN?
+    ShimmerCharacterList(), AYNI PAKETTE (presentation.list) duran
+    ShimmerEffect.kt dosyasında tanımlı bir @Composable fonksiyon. Kotlin'de,
+    AYNI PAKETTEKİ dosyalar birbirini import ETMEDEN, DOĞRUDAN kullanabilir -
+    bu yüzden burada ayrıca "import ...ShimmerCharacterList" satırına GEREK
+    YOK (CharacterCard'ı da hiç import etmeden kullandığımızı fark etmiş
+    olabilirsin, AYNI sebep).
+
+ 2) BU DOSYA HANGİ DOSYALARLA BAĞLANTILI (GÜNCEL)?
+    - presentation/list/CharacterListViewModel.kt VE CharacterListState.kt ->
+      state'i buradan okuyoruz, DEĞİŞMEDİ.
+    - presentation/list/CharacterCard.kt -> gerçek liste elemanlarını
+      ÇİZERKEN kullanılıyor, DEĞİŞMEDİ.
+    - presentation/list/ShimmerEffect.kt -> YENİ BAĞLANTI: state.isLoading
+      true iken, ShimmerCharacterList() BURADAN çağrılıyor. ShimmerEffect.kt
+      içindeki Modifier.shimmerEffect() extension'ı da, ShimmerCharacterCard
+      İÇİNDE kullanılıyor - yani zincir şöyle: CharacterListScreen (bu
+      dosya) -> ShimmerCharacterList() -> ShimmerCharacterCard() ->
+      Modifier.shimmerEffect().
+    - presentation/navigation/NavGraph.kt -> "onCharacterClick" parametresini
+      BURAYA veriyor.
  ===========================================================
 */
