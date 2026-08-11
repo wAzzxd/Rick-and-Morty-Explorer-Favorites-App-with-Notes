@@ -82,4 +82,11 @@ dependencies {
 
 
     implementation("androidx.compose.material:material-icons-extended:1.7.8")
+
+
+    // Coroutines test - ViewModel'lerdeki coroutine kodunu (viewModelScope.launch gibi)
+    // test ortamında GÜVENLE çalıştırabilmemizi sağlayan özel test araçları.
+    // "testImplementation" -> bu kütüphane SADECE test kodunda kullanılabilir,
+    // gerçek uygulamaya (APK'ye) hiç dahil edilmez.
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
 }
